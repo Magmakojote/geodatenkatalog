@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geodaten Katalog</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+    
+    <!-- PapaParse für CSV Import -->
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background-color: #f8fafc; }
+        .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .transition-all { transition-property: all; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); transition-duration: 200ms; }
+        .line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        /* Popover Animation */
+        .popover-enter { opacity: 0; transform: scale(0.95); }
+        .popover-enter-active { opacity: 1; transform: scale(1); transition: opacity 100ms, transform 100ms; }
+        .popover-exit { opacity: 1; transform: scale(1); }
+        .popover-exit-active { opacity: 0; transform: scale(0.95); transition: opacity 100ms, transform 100ms; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- KONFIGURATION ---
+        const STORAGE_KEY = 'geodaten_katalog_cache_v1';
+
+        const { useState, useMemo, useEffect, useRef } = React;
+
+        // --- ICONS ---
+        const IconBase = ({ children, className, size = 24, ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>{children}</svg>
+        );
+        const SearchIcon = (props) => <IconBase {...props}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></IconBase>;
+        const UploadCloud = (props) => <IconBase {...props}><polyline points="16 16 12 12 8 16" /><line x1="12" y1="12" x2="12" y2="21" /><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" /><polyline points="16 16 12 12 8 16" /></IconBase>;
+        const ExternalLink = (props) => <IconBase {...props}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></IconBase>;
+        const MapIcon = (props) => <IconBase {...props}><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" /><line x1="8" y1="2" x2="8" y2="18" /><line x1="16" y1="6" x2="16" y2="22" /></IconBase>;
+        const Database = (props) => <IconBase {...props}><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /></IconBase>;
+        const Globe = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10" /><line x1="2" y1="12" x2="22" y2="12" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1 4-10z" /></IconBase>;
+        const Layers = (props) => <IconBase {...props}><polygon points="12 2 2 7 12 12 22 7 12 2" /><polyline points="2 17 12 22 22 17" /><polyline points="2 12 12 17 22 12" /></IconBase>;
+        const CheckCircle = (props) => <IconBase {...props}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" /></IconBase>;
+        const Info = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></IconBase>;
+        const ChevronDown = (props) => <IconBase {...props}><polyline points="6 9 12 15 18 9" /></IconBase>;
+        const ChevronUp = (props) => <IconBase {...props}><polyline points="18 15 12 9 6 15" /></IconBase>;
+        const AlertTriangle = (props) => <IconBase {...props}><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></IconBase>;
+        const Save = (props) => <IconBase {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></IconBase>;
+        const HelpCircle = (props) => <IconBase {...props}><circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" /><line x1="12" y1="17" x2="12.01" y2="17" /></IconBase>;
+
+        // --- COMPONENTS ---
+
+        const Badge = ({ children, color }) => {
+            const colors = {
+                blue: "bg-blue-100 text-blue-800 border-blue-200",
+                green: "bg-emerald-100 text-emerald-800 border-emerald-200",
+                orange: "bg-orange-100 text-orange-800 border-orange-200",
+                purple: "bg-purple-100 text-purple-800 border-purple-200",
+                gray: "bg-gray-100 text-gray-800 border-gray-200",
+                red: "bg-red-100 text-red-800 border-red-200",
+            };
+            return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${colors[color] || colors.gray}`}>{children}</span>;
+        };
+
+        const StatusDot = ({ status }) => {
+            if (!status) return null;
+            const s = status.toLowerCase().trim();
+            // "/" oder "-" = kein Status gepflegt -> keinen Punkt anzeigen
+            if (s === '/' || s === '-' || s === '') return null;
+            const isOkay = s === 'okay' || s === 'ok' || s === 'aktiv';
+            return (
+                <div className="flex items-center gap-1.5" title={isOkay ? "Status: Okay" : `Status: ${status}`}>
+                    <span className={`flex h-2.5 w-2.5 rounded-full ${isOkay ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                    <span className="text-xs text-gray-400 font-medium hidden sm:block">{isOkay ? 'Aktiv' : 'Prüfen'}</span>
+                </div>
+            );
+        };
+
+        const HelpButton = () => {
+            const [isOpen, setIsOpen] = useState(false);
+            const ref = useRef(null);
+
+            // Klick außerhalb schließt das Popover
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (ref.current && !ref.current.contains(event.target)) {
+                        setIsOpen(false);
+                    }
+                };
+                document.addEventListener('mousedown', handleClickOutside);
+                return () => document.removeEventListener('mousedown', handleClickOutside);
+            }, []);
+
+            return (
+                <div className="relative inline-block ml-2" ref={ref}>
+                    <button 
+                        onClick={() => setIsOpen(!isOpen)} 
+                        className="text-gray-400 hover:text-blue-600 transition-colors focus:outline-none"
+                        title="Info & Datenschutz"
+                    >
+                        <HelpCircle size={20} />
+                    </button>
+                    {isOpen && (
+                        <div className="absolute left-0 mt-2 w-64 p-4 bg-white rounded-lg shadow-xl border border-gray-100 z-50 transform origin-top-left">
+                            <h4 className="text-sm font-semibold text-gray-900 mb-2">Datenschutz & Info</h4>
+                            <ul className="text-xs text-gray-600 space-y-2 list-disc list-inside">
+                                <li>Daten werden <strong>nur lokal</strong> in deinem Browser gespeichert.</li>
+                                <li>Keine Übertragung an einen Server.</li>
+                                <li>Ein neuer Import überschreibt die bestehende Liste.</li>
+                            </ul>
+                            <div className="mt-3 pt-3 border-t border-gray-100 text-right">
+                                <button onClick={() => setIsOpen(false)} className="text-xs font-medium text-blue-600 hover:text-blue-800">
+                                    Verstanden
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ExpandableText = ({ text }) => {
+            const [isExpanded, setIsExpanded] = useState(false);
+            if (!text) return null;
+            if (text.length < 150) return <p className="text-sm text-gray-600 mt-4">{text}</p>;
+
+            return (
+                <div className="mt-4">
+                    <p className={`text-sm text-gray-600 ${isExpanded ? '' : 'line-clamp-3'}`}>
+                        {text}
+                    </p>
+                    <button 
+                        onClick={(e) => { e.preventDefault(); setIsExpanded(!isExpanded); }}
+                        className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1 flex items-center gap-1"
+                    >
+                        {isExpanded ? <>Weniger anzeigen <ChevronUp size={12}/></> : <>Mehr lesen <ChevronDown size={12}/></>}
+                    </button>
+                </div>
+            );
+        };
+
+        const TypeIcon = ({ type }) => {
+            if (!type) return <Layers size={20} className="text-gray-400" />;
+            const t = type.toLowerCase();
+            if (t.includes('wms') || t.includes('wmts')) return <MapIcon size={20} className="text-blue-500" />;
+            if (t.includes('wfs')) return <Database size={20} className="text-emerald-500" />;
+            if (t.includes('portal') || t.includes('web')) return <Globe size={20} className="text-purple-500" />;
+            return <Layers size={20} className="text-gray-500" />;
+        };
+
+        // --- EMPTY STATE COMPONENT ---
+        const WelcomeScreen = ({ onUpload, errorMsg }) => (
+            <div className="flex flex-col items-center justify-center py-20 px-4">
+                <div className="bg-blue-50 p-6 rounded-full mb-6">
+                    <UploadCloud size={48} className="text-blue-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-3 text-center">Willkommen im Geodaten Katalog</h2>
+                <p className="text-gray-500 max-w-md text-center mb-8">
+                    Es sind noch keine Daten vorhanden. Importiere die CSV-Datei, um zu starten. 
+                    Die Daten bleiben sicher auf diesem Gerät.
+                </p>
+                
+                <label className="group relative flex justify-center py-3 px-6 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 cursor-pointer shadow-sm transition-all hover:shadow-md">
+                    <span className="flex items-center">
+                        <UploadCloud className="mr-2 h-5 w-5" />
+                        CSV Datei auswählen
+                    </span>
+                    <input type="file" accept=".csv" onChange={onUpload} className="hidden" />
+                </label>
+
+                {errorMsg && (
+                    <div className="mt-6 p-3 bg-red-50 border border-red-200 rounded-md flex items-center text-red-700 text-sm max-w-md">
+                        <AlertTriangle className="h-4 w-4 mr-2 flex-shrink-0" />
+                        {errorMsg}
+                    </div>
+                )}
+            </div>
+        );
+
+        const App = () => {
+            // Lade Daten aus dem LocalStorage
+            const [data, setData] = useState(() => {
+                try {
+                    const savedData = localStorage.getItem(STORAGE_KEY);
+                    return savedData ? JSON.parse(savedData) : [];
+                } catch (e) {
+                    console.error("Fehler beim Laden des Cache:", e);
+                    return [];
+                }
+            });
+
+            const [searchTerm, setSearchTerm] = useState("");
+            const [filterRegion, setFilterRegion] = useState("Alle");
+            const [filterType, setFilterType] = useState("Alle");
+            const [filterTopic, setFilterTopic] = useState("Alle");
+            const [errorMsg, setErrorMsg] = useState("");
+            const [importSuccess, setImportSuccess] = useState(false);
+
+            // Prüfen ob echte Daten vorhanden sind
+            const hasData = data.length > 0;
+
+            // CSV Import Handler
+            const handleFileUpload = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+
+                Papa.parse(file, {
+                    header: true,
+                    skipEmptyLines: true,
+                    complete: (results) => {
+                        try {
+                            const parsedData = results.data.map((row, index) => {
+                                const name = row["Name im GIS"] || row["Name"] || row["Dienstbezeichnung"] || "Unbenannt";
+                                const region = row["Geltungsbereich"] || row["Gebiet"] || "Unbekannt";
+                                const type = row["Form"] || (row["Name"] ? "Portal" : "Sonstige"); 
+                                const description = row["Beschreibung"] || row["Kurzbeschreibung"] || "";
+                                const url = row["URL"] || "";
+                                const source = row["Plattform/Quelle"] || "Geodatenquelle";
+                                const status = row["Status"] || "okay";
+                                const topic = row["Thema"] || "";
+
+                                return {
+                                    id: index + 1,
+                                    name: name.trim(),
+                                    region: region.trim(),
+                                    type: type.trim(),
+                                    description: description.trim(),
+                                    url: url.trim(),
+                                    source: source.trim(),
+                                    status: status.trim(),
+                                    topic: topic.trim()
+                                };
+                            }).filter(item => item.name !== "Unbenannt"); 
+
+                            if (parsedData.length > 0) {
+                                setData(parsedData);
+                                localStorage.setItem(STORAGE_KEY, JSON.stringify(parsedData));
+                                setErrorMsg("");
+                                setImportSuccess(true);
+                                setTimeout(() => setImportSuccess(false), 3000); 
+                            } else {
+                                setErrorMsg("Keine gültigen Daten in der CSV gefunden.");
+                            }
+                        } catch (err) {
+                            console.error(err);
+                            setErrorMsg("Fehler beim Verarbeiten der CSV. Stimmen die Spaltennamen?");
+                        }
+                    },
+                    error: (err) => {
+                        setErrorMsg("Fehler beim Lesen der Datei: " + err.message);
+                    }
+                });
+            };
+
+            // --- DYNAMISCHE FILTER LOGIK ---
+            const matchesSearch = (item) => {
+                if (!searchTerm) return true;
+                const t = searchTerm.toLowerCase();
+                return (
+                    (item.name || "").toLowerCase().includes(t) ||
+                    (item.description || "").toLowerCase().includes(t) ||
+                    (item.topic || "").toLowerCase().includes(t) ||
+                    (item.source || "").toLowerCase().includes(t) ||
+                    (item.region || "").toLowerCase().includes(t) ||
+                    (item.type || "").toLowerCase().includes(t)
+                );
+            };
+
+            const availableRegions = useMemo(() => {
+                const filtered = data.filter(item => {
+                    const typeMatch = filterType === "Alle" || item.type === filterType;
+                    const topicMatch = filterTopic === "Alle" || item.topic === filterTopic;
+                    return typeMatch && topicMatch && matchesSearch(item);
+                });
+                const set = new Set(filtered.map(d => d.region).filter(Boolean));
+                return ["Alle", ...[...set].sort()];
+            }, [data, filterType, filterTopic, searchTerm]);
+
+            const availableTypes = useMemo(() => {
+                const filtered = data.filter(item => {
+                    const regionMatch = filterRegion === "Alle" || item.region === filterRegion;
+                    const topicMatch = filterTopic === "Alle" || item.topic === filterTopic;
+                    return regionMatch && topicMatch && matchesSearch(item);
+                });
+                const set = new Set(filtered.map(d => d.type).filter(Boolean));
+                return ["Alle", ...[...set].sort()];
+            }, [data, filterRegion, filterTopic, searchTerm]);
+
+            const availableTopics = useMemo(() => {
+                const filtered = data.filter(item => {
+                    const regionMatch = filterRegion === "Alle" || item.region === filterRegion;
+                    const typeMatch = filterType === "Alle" || item.type === filterType;
+                    return regionMatch && typeMatch && matchesSearch(item);
+                });
+                const set = new Set(filtered.map(d => d.topic).filter(Boolean));
+                return ["Alle", ...[...set].sort()];
+            }, [data, filterRegion, filterType, searchTerm]);
+
+            const filteredData = useMemo(() => {
+                return data.filter(item => {
+                    const regionMatch = filterRegion === "Alle" || item.region === filterRegion;
+                    const typeMatch = filterType === "Alle" || item.type === filterType;
+                    const topicMatch = filterTopic === "Alle" || item.topic === filterTopic;
+                    return regionMatch && typeMatch && topicMatch && matchesSearch(item);
+                });
+            }, [data, searchTerm, filterRegion, filterType, filterTopic]);
+
+            const getTypeColor = (type) => {
+                if (!type) return "gray";
+                const t = type.toLowerCase();
+                if (t.includes('wms') || t.includes('wmts')) return "blue";
+                if (t.includes('wfs')) return "green";
+                if (t.includes('csv') || t.includes('download')) return "orange";
+                if (t.includes('portal')) return "purple";
+                return "gray";
+            };
+
+            return (
+                <div className="min-h-screen pb-12">
+                    <header className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                <div className="flex items-center">
+                                    <div className="mr-3">
+                                        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+                                            <MapIcon className="text-blue-600" />
+                                            Geodaten Katalog
+                                        </h1>
+                                        <p className="text-sm text-gray-500 mt-1">Zentrales Verzeichnis für WMS, WFS und Geodatenquellen</p>
+                                    </div>
+                                    <HelpButton />
+                                </div>
+                                
+                                {hasData && (
+                                    <div className="flex flex-col items-end gap-1 w-full md:w-auto">
+                                        <div className="flex gap-2 w-full md:w-auto">
+                                            <div className="relative w-full md:w-80">
+                                                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><SearchIcon className="h-5 w-5 text-gray-400" /></div>
+                                                <input type="text" className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm" placeholder="Suche..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                                            </div>
+                                            
+                                            <label className={`flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white cursor-pointer shadow-sm whitespace-nowrap transition-colors ${importSuccess ? 'bg-green-600 hover:bg-green-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                                                {importSuccess ? <CheckCircle className="mr-2 h-4 w-4" /> : <UploadCloud className="mr-2 h-4 w-4" />}
+                                                {importSuccess ? 'Gespeichert!' : 'Import'}
+                                                <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+                                            </label>
+                                        </div>
+                                        <span className="text-xs text-gray-400 flex items-center gap-1"><Save className="h-3 w-3" /> Daten lokal im Browser gespeichert</span>
+                                    </div>
+                                )}
+                            </div>
+                            
+                            {hasData && (
+                                <>
+                                    {errorMsg && (
+                                        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center text-red-700 text-sm">
+                                            <AlertTriangle className="h-4 w-4 mr-2" />
+                                            {errorMsg}
+                                        </div>
+                                    )}
+
+                                    <div className="flex flex-wrap gap-4 mt-4 pt-4 border-t border-gray-100">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-700">Region:</span>
+                                            <select value={filterRegion} onChange={(e) => setFilterRegion(e.target.value)} className="block w-40 pl-3 pr-10 py-1.5 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">{availableRegions.map(r => <option key={r} value={r}>{r}</option>)}</select>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-700">Typ:</span>
+                                            <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="block w-40 pl-3 pr-10 py-1.5 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">{availableTypes.map(t => <option key={t} value={t}>{t}</option>)}</select>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-700">Thema:</span>
+                                            <select value={filterTopic} onChange={(e) => setFilterTopic(e.target.value)} className="block w-40 pl-3 pr-10 py-1.5 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">{availableTopics.map(t => <option key={t} value={t}>{t}</option>)}</select>
+                                        </div>
+                                        <div className="ml-auto text-sm text-gray-500 self-center">{filteredData.length} Dienste</div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </header>
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        {!hasData ? (
+                            <WelcomeScreen onUpload={handleFileUpload} errorMsg={errorMsg} />
+                        ) : filteredData.length === 0 ? (
+                            <div className="text-center py-12 bg-white rounded-lg border border-gray-200 border-dashed">
+                                <Info className="mx-auto h-12 w-12 text-gray-400" />
+                                <h3 className="mt-2 text-sm font-medium text-gray-900">Keine Dienste gefunden</h3>
+                                <p className="mt-1 text-sm text-gray-500">Versuche die Suchbegriffe oder Filter anzupassen.</p>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {filteredData.map((item, idx) => (
+                                    <div key={item.id || idx} className="bg-white rounded-lg border border-gray-200 shadow-sm card-hover transition-all flex flex-col h-full relative overflow-hidden">
+                                        <div className="p-5 flex-1">
+                                            <div className="flex items-start justify-between mb-2">
+                                                <Badge color={getTypeColor(item.type)}>{item.type}</Badge>
+                                                <div className="flex items-center gap-2">
+                                                     <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded border border-gray-100">{item.region}</span>
+                                                     <StatusDot status={item.status} />
+                                                </div>
+                                            </div>
+                                            <div className="flex items-start gap-3 mt-3">
+                                                <div className="mt-1 flex-shrink-0"><TypeIcon type={item.type} /></div>
+                                                <div>
+                                                    <h3 className="text-lg font-semibold text-gray-900 leading-tight">{item.name}</h3>
+                                                    <p className="text-xs text-gray-500 mt-1 font-medium">{item.source}</p>
+                                                </div>
+                                            </div>
+                                            <ExpandableText text={item.description} />
+                                            {item.topic && <div className="mt-3 flex flex-wrap gap-1"><span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600">#{item.topic}</span></div>}
+                                        </div>
+                                        <div className="bg-gray-50 px-5 py-4 border-t border-gray-100 rounded-b-lg">
+                                            {item.url ? (
+                                                <a href={item.url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center w-full px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md hover:bg-blue-700 shadow-sm transition-colors"><ExternalLink size={16} className="mr-2" />Öffnen</a>
+                                            ) : (
+                                                <span className="block w-full text-center text-xs text-gray-400 py-2">Keine URL verfügbar</span>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </main>
+                    <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center text-sm text-gray-400">Interne Geodaten-Übersicht • {new Date().getFullYear()}</footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
